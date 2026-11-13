@@ -4,6 +4,11 @@ services:
     image: coldchain-closure-checker:latest
     ports:
       - "8000:8000"
+    environment:
+      # 附件归档根目录（持久卷挂载点）
+      ARCHIVE_DIR: /data/archive
+    volumes:
+      - archive-data:/data/archive
     depends_on:
       sample-site:
         condition: service_started
@@ -21,3 +26,6 @@ services:
 networks:
   closure-net:
     driver: bridge
+
+volumes:
+  archive-data:

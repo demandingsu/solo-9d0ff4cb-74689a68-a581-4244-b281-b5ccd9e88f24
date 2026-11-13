@@ -45,6 +45,14 @@ class Listing:
     next_page_url: str | None = None
 
 
+@dataclass
+class AttachmentLink:
+    """详情页中提取到的一个同站 PDF 附件链接。"""
+
+    url: str
+    name: str  # 依据 URL 文件名推断的原始文件名（未清洗）
+
+
 def _absolute(base_url: str, href: str) -> str:
     return urljoin(base_url, href)
 
@@ -220,3 +228,49 @@ def normalize_url(url: str) -> str:
     """去除 fragment，便于分页去重。"""
     p = urlparse(url)
     return urlunparse((p.scheme, p.netloc, p.path, p.params, p.query, ""))
+
+
+# ---- 附件提取（PDF 交通管制图归档） --------------------------------------
+
+_PDF_PATH_RE = re.compile(r"\.pdf$", re.I)
+
+
+def parse_detail_attachments(html: str, page_url: str) -> tuple[str, list[AttachmentLink]]:
+    """解析详情页，返回 (标题, 同站 PDF 附件链接列表)。
+
+    优先在附件容器（section/div/ul.attachments 等）中查找，找不到则整页扫描；
+    仅保留同站且路径以 .pdf 结尾的链接，按 URL 去重。
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    title_tag = soup.find(["h1", "h2"])
+    title = title_tag.get_text(" ", strip=True) if title_tag else ""
+
+    containers = soup.select(
+        "section.attachments, div.attachments, ul.attachments, "
+        "div.attachment-list, section.attachment, div.fujian"
+    )
+    anchors = []
+    if containers:
+        for c in containers:
+            anchors.extend(c.find_all("a", href=True))
+    if not anchors:
+        anchors = soup.find_all("a", href=True)
+
+    links: list[AttachmentLink] = []
+    seen: set[str] = set()
+    for a in anchors:
+        href = a.get("href", "").strip()
+        if not href or href.startswith("#"):
+            continue
+        absolute = _absolute(page_url, href)
+        if not _same_origin(page_url, absolute):
+            continue
+        if not _PDF_PATH_RE.search(urlparse(absolute).path):
+            continue
+        key = normalize_url(absolute)
+        if key in seen:
+            continue
+        seen.add(key)
+        name = urlparse(absolute).path.rstrip("/").rsplit("/", 1)[-1]
+        links.append(AttachmentLink(url=absolute, name=name or "attachment.pdf"))
+    return title, links

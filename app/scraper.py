@@ -29,6 +29,14 @@ class ScrapeResult:
         return not self.failures
 
 
+@dataclass
+class DetailPage:
+    """抓取到的公告详情页原始 HTML（供附件归档提取附件链接）。"""
+
+    url: str
+    html: str
+
+
 async def _get(client: httpx.AsyncClient, url: str) -> str:
     last_exc: Exception | None = None
     for attempt in range(RETRIES + 1):
@@ -63,6 +71,39 @@ async def scrape(list_url: str) -> ScrapeResult:
                 )
 
     return result
+
+
+async def fetch_detail_pages(
+    list_url: str,
+) -> tuple[list[DetailPage], list[FetchFailureRecord]]:
+    """归档采集入口：分页列表 -> 去重详情链接 -> 抓取详情页原始 HTML。
+
+    与 scrape() 共用列表遍历与重试逻辑，但不解析封闭字段；
+    任一详情页抓取失败只记录失败地址，不影响其他页面。
+    """
+    pages: list[DetailPage] = []
+    failures: list[FetchFailureRecord] = []
+    holder = ScrapeResult()  # 复用 _collect_listing_pages 的列表失败记录
+    headers = {"User-Agent": "coldchain-attachment-archiver/1.0"}
+
+    async with httpx.AsyncClient(
+        timeout=REQUEST_TIMEOUT, follow_redirects=True, headers=headers
+    ) as client:
+        detail_urls = await _collect_listing_pages(client, list_url, holder)
+        failures.extend(holder.failures)
+
+        for detail_url in detail_urls:
+            try:
+                html = await _get(client, detail_url)
+                pages.append(DetailPage(url=detail_url, html=html))
+            except Exception as exc:  # 详情失败：记录并继续，绝不静默丢弃
+                failures.append(
+                    FetchFailureRecord(
+                        url=detail_url, stage="detail", reason=_reason(exc)
+                    )
+                )
+
+    return pages, failures
 
 
 async def _collect_listing_pages(
